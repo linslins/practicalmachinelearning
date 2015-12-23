@@ -1,0 +1,127 @@
+---
+title: "Practical Machine Learning Project"
+author: "Carles C."
+date: "15  December  2015"
+output: html_document
+---
+
+## Executive Summary
+
+The project attempts to predict which classification label is given to 20 exercise routines based on data obtained by accelerometers placed on participants and using a complete set to train the model.
+Data  for the training and test sets is provided by http://groupware.les.inf.puc-rio.br/har .
+The model selected and explained in this report is a __random forest__ with a 3 fold cross validation as a resampling method, along with some tidying of the dataset prior to computing and usage of the multiple cores of the computer to speed up calculations.
+The model generates a 20/20 result with the test data.
+
+## Modelling
+
+_First of all, we load the necessary packages (which need to be downloaded along with the datasets on the working directory)_
+
+```{r cache=TRUE}
+library(caret); library(dplyr); library(doParallel)
+```
+
+The training dataset is read and divided to form a set used for real training of the model and another one to validate the model (size of the two sets has a 60-40 ratio). The validation set will be used to assess the quality of the models proposed, and once the result is satisfactory, the model can be applied to the testing set, which will give the values to be submitted.
+
+```{r cache=TRUE}
+# Read training data
+allActivity <- read.csv("pml-training.csv", header=TRUE, sep=",")
+
+# Separate data for training and validation
+inTrain <- createDataPartition(y=allActivity$classe, p=0.6, list=FALSE)
+
+rawtraining <- allActivity[inTrain,]
+validationall <- allActivity[-inTrain,]
+validation <- select(validationall, -classe)
+```
+
+In a straightforward exploration of the data we see that many columns are full of NAs, so removing these columns will facilitate computing with little effect on the output.
+
+To do this cleaning  we can either use `sapply` to find those NAs, like this:
+`na_count <-sapply(rawtraining, function(y) sum(length(which(is.na(y)))))`
+
+`na_count <- data.frame(na_count)`
+
+But a fellow student (M. Szczepaniak) proposed on the discussion forums a very elegant function to find the percentage of NAs in each column, that I use to subset my data.
+(The closer this value is to 1, the less data the column contains)
+```{r cache=TRUE}
+getFractionMissing <- function(df = rawtraining) {
+      colCount <- ncol(df)
+      returnDf <- data.frame(index=1:ncol(df),
+                             columnName=rep("undefined", colCount),
+                             FractionMissing=rep(-1, colCount),
+                             stringsAsFactors=FALSE)
+      for(i in 1:colCount) {
+            colVector <- df[,i]
+            missingCount <- length(which(colVector == "") * 1)
+            missingCount <- missingCount + sum(is.na(colVector) * 1)
+            returnDf$columnName[i] <- as.character(names(df)[i])
+            returnDf$FractionMissing[i] <- missingCount / length(colVector)
+      }
+      return(returnDf)
+}
+```
+With this function we select only columns that are mostly populated
+```{r cache=TRUE}
+fractionmissing <- getFractionMissing(rawtraining)
+existvar <- fractionmissing[fractionmissing$FractionMissing<=0.5,2]
+mostdata <- rawtraining[,existvar]
+```
+Concerned with the computation time of factor variables when using random forest, I decide to remove factor variables from the training set, and also, after finding strange results in initial attempts in training my models, I decide to try with removing `X` column (which ends up generating a very good outcome).
+
+```{r cache=TRUE}
+training <- select(mostdata, -X, -user_name, -cvtd_timestamp, -new_window)
+```
+
+The model generated with the training dataset (cleaned) is a random forest, performed with the `caret` package.
+with the objective of making the computation more agile (the model has been generated in several attempts using computers with Intel Core i3 and i5 with 4 and 8 Gb RAM respectively), it has been decided to use a cross validation with number = 3 for the resampling of data and also set a parallel computing arrangement with the `doParallel` package.
+```{r cache=TRUE}
+registerDoParallel(makeCluster(detectCores()))
+
+model1 <- train(classe~., data=training, method="rf",
+                trControl=trainControl(method="cv", number=3))
+```
+Which creates the following model
+```{r cache=TRUE}
+model1$finalModel
+```
+We can see on the confusion matrix how close the model fits the training data, with a __very low value of the Out-Of-Bag error rate (0.15%)__.
+
+The model is applied to the validation set, that at this stage will serve as test set (for instance to provide a simulation of an Out-Of-Sample error) until we apply it in the end to the real testing dataset used for the submission phase.
+```{r cache=TRUE}
+# Validate with part of training data (validation)
+resultmodel1 <- predict(model1, validation)
+summary(resultmodel1)
+# Result of validation, with OOS error
+confusionMatrix(resultmodel1, validationall$classe)
+```
+The _accuracy_ value provided on the _Overall statistics_ section can help interpret the OOS error as: __OOS error = 1-accuracy (in this case, 1-0.9994 = 0.06%)__.
+
+## Results
+
+To generate the final results that will be uploaded on the course submission page, the final test dataset is loaded and run with the model that has been developed and that has generated quite good outcomes.
+
+```{r cache=TRUE}
+testing <- read.csv("pml-testing.csv", header=TRUE, sep=",")
+
+# Apply model to test data
+finaltest <- predict(model1, testing)
+```
+
+__final test__ generates a list of 20 values of the `classe` variable that have been predicted absed on the exercise data provided for testing, and that need to be submitted as 20 individual files.
+
+__The files generated during this process with the model here presented have resulted in a 20/20 score in the automatic grading submission page__.
+
+## Annex
+
+The following script, proposed by the course instructors have been used to generate 20 individual files for submission
+```{r eval=FALSE}
+pml_write_files = function(x){
+      n = length(x)
+      for(i in 1:n){
+            filename = paste0("problem_id_",i,".txt")
+            write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+      }
+}
+
+pml_write_files(finaltest)   # generates 20 files, one for each result
+```
